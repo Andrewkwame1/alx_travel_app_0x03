@@ -1,5 +1,6 @@
 """
 Celery tasks for asynchronous email sending
+
 """
 import logging
 from django.core.mail import send_mail

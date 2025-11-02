@@ -8,7 +8,10 @@ import logging
 from .models import Listing, Booking, Review, Payment
 from .serializers import ListingSerializer, BookingSerializer, ReviewSerializer, PaymentSerializer
 from .chapa_utils import ChapaAPIClient, create_payment_for_booking, update_payment_status
-from .email_tasks import send_payment_confirmation_email, send_payment_failure_email
+from .tasks import (
+    send_payment_confirmation_email_task,
+    send_payment_failure_email_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -332,8 +335,20 @@ class PaymentViewSet(viewsets.ModelViewSet):
                         payment_method=result.get('method')
                     )
                     
-                    # Send confirmation email
-                    send_payment_confirmation_email(payment.booking, payment)
+                    # Send confirmation email asynchronously via Celery
+                    send_payment_confirmation_email_task.delay(
+                        booking_id=str(payment.booking.booking_id),
+                        guest_email=payment.booking.guest.email,
+                        guest_name=payment.booking.guest.first_name or payment.booking.guest.username,
+                        listing_title=payment.booking.listing.title,
+                        listing_location=payment.booking.listing.location,
+                        check_in_date=str(payment.booking.check_in_date),
+                        check_out_date=str(payment.booking.check_out_date),
+                        amount=str(payment.amount),
+                        currency=payment.currency,
+                        payment_id=str(payment.payment_id),
+                        transaction_id=result.get('reference')
+                    )
                     
                     return Response({
                         'success': True,
@@ -351,10 +366,13 @@ class PaymentViewSet(viewsets.ModelViewSet):
                         error_message='Payment failed on Chapa'
                     )
                     
-                    send_payment_failure_email(
-                        payment.booking,
-                        payment,
-                        'Your payment failed. Please try again.'
+                    # Send failure email asynchronously via Celery
+                    send_payment_failure_email_task.delay(
+                        guest_email=payment.booking.guest.email,
+                        guest_name=payment.booking.guest.first_name or payment.booking.guest.username,
+                        listing_title=payment.booking.listing.title,
+                        booking_id=str(payment.booking.booking_id),
+                        error_message='Your payment failed. Please try again.'
                     )
                     
                     return Response({
@@ -427,7 +445,20 @@ class PaymentViewSet(viewsets.ModelViewSet):
                         payment_method=result.get('method')
                     )
                     
-                    send_payment_confirmation_email(payment.booking, payment)
+                    # Send confirmation email asynchronously via Celery
+                    send_payment_confirmation_email_task.delay(
+                        booking_id=str(payment.booking.booking_id),
+                        guest_email=payment.booking.guest.email,
+                        guest_name=payment.booking.guest.first_name or payment.booking.guest.username,
+                        listing_title=payment.booking.listing.title,
+                        listing_location=payment.booking.listing.location,
+                        check_in_date=str(payment.booking.check_in_date),
+                        check_out_date=str(payment.booking.check_out_date),
+                        amount=str(payment.amount),
+                        currency=payment.currency,
+                        payment_id=str(payment.payment_id),
+                        transaction_id=result.get('reference')
+                    )
                     
                     return Response({
                         'success': True,

@@ -17,7 +17,8 @@ The ALX Travel App API mirrors real-world travel booking platforms like Airbnb a
 ✅ **Comprehensive Error Handling** - Meaningful error messages and proper HTTP status codes  
 ✅ **🆕 Chapa Payment Gateway Integration** - Secure payment processing for bookings  
 ✅ **🆕 Payment Transaction Tracking** - Full payment history and status management  
-✅ **🆕 Email Notifications** - Automated confirmation emails after successful payments  
+✅ **🆕 Asynchronous Task Processing** - Celery + RabbitMQ for background tasks  
+✅ **🆕 Email Notifications** - Automated confirmation emails sent asynchronously without blocking requests  
 
 ## Project Structure
 
@@ -33,8 +34,9 @@ alx_travel_app/
 │   ├── models.py                # Listing, Booking, Review, Payment models
 │   ├── serializers.py           # DRF serializers for API (includes PaymentSerializer)
 │   ├── views.py                 # ViewSets with CRUD operations (includes PaymentViewSet)
+│   ├── tasks.py                 # Celery shared tasks for async email sending
 │   ├── chapa_utils.py           # Chapa API integration utilities
-│   ├── email_tasks.py           # Email notification functions
+│   ├── email_tasks.py           # Email notification functions (legacy)
 │   ├── urls.py                  # API route configuration with routers
 │   ├── admin.py                 # Django admin configuration
 │   ├── tests.py                 # Unit tests
@@ -148,7 +150,262 @@ The API will be available at `http://localhost:8000/`
 - **ReDoc**: http://localhost:8000/api/redoc/
 - **OpenAPI Schema**: http://localhost:8000/api/schema/
 
-### Base URL
+```
+
+### 8. (Optional) Setup Celery with RabbitMQ for Asynchronous Email Notifications
+
+This application supports asynchronous task processing using Celery with RabbitMQ as the message broker. This allows email notifications to be sent in the background without blocking the main request-response cycle.
+
+#### Prerequisites
+
+- **RabbitMQ**: Download from https://www.rabbitmq.com/download.html
+- **Redis** (optional, used for task results): https://redis.io/
+
+#### Installation Steps
+
+##### Option A: Using RabbitMQ (Recommended for Production)
+
+**Windows:**
+```bash
+# Download and install RabbitMQ from https://www.rabbitmq.com/install-windows.html
+# Or use Chocolatey
+choco install rabbitmq-server
+
+# Start RabbitMQ
+rabbitmq-server.bat  # or use Windows Services
+```
+
+**macOS:**
+```bash
+# Install with Homebrew
+brew install rabbitmq
+
+# Start RabbitMQ
+brew services start rabbitmq
+```
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt-get install rabbitmq-server
+sudo systemctl start rabbitmq-server
+```
+
+##### Option B: Using Redis (Alternative)
+
+**Windows:**
+```bash
+# Download from https://github.com/microsoftarchive/redis/releases
+# Or use WSL or Docker
+docker run -d -p 6379:6379 redis:latest
+```
+
+**macOS:**
+```bash
+brew install redis
+brew services start redis
+```
+
+**Linux:**
+```bash
+sudo apt-get install redis-server
+sudo systemctl start redis-server
+```
+
+#### Configure Celery in `.env`
+
+```env
+# Message Broker Configuration (RabbitMQ)
+CELERY_BROKER_URL=amqp://guest:guest@localhost:5672//
+
+# Result Backend Configuration (Redis)
+CELERY_RESULT_BACKEND=redis://localhost:6379/0
+
+# Email Configuration
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=your-email@gmail.com
+EMAIL_HOST_PASSWORD=your-app-password
+DEFAULT_FROM_EMAIL=noreply@alxtravelapp.com
+```
+
+#### Running Celery Worker
+
+**Windows (PowerShell):**
+```bash
+# In a new terminal
+celery -A alx_travel_app worker -l info
+```
+
+**macOS/Linux:**
+```bash
+# In a new terminal
+celery -A alx_travel_app worker -l info
+```
+
+#### Running Celery Beat (Task Scheduler - Optional)
+
+```bash
+celery -A alx_travel_app beat -l info
+```
+
+---
+
+## Asynchronous Task Processing with Celery
+
+The application uses Celery to handle background tasks asynchronously. Currently implemented tasks include:
+
+### 🆕 Email Notification Tasks
+
+#### Available Tasks
+
+1. **`send_booking_confirmation_email_task`** - Sends booking confirmation to guests
+   - Triggered when a booking is created
+   - Email includes booking details
+
+2. **`send_payment_confirmation_email_task`** - Sends payment confirmation email
+   - Triggered when payment is successfully verified
+   - Email includes payment and booking details
+   - Retries up to 3 times on failure with exponential backoff
+
+3. **`send_payment_failure_email_task`** - Notifies about payment failure
+   - Triggered when payment fails
+   - Includes error details and retry instructions
+
+### Task Features
+
+✅ **Asynchronous Execution** - Emails sent in background workers  
+✅ **Automatic Retries** - Failed tasks retry up to 3 times with exponential backoff  
+✅ **Logging** - All task executions logged for monitoring  
+✅ **Non-blocking** - User requests complete immediately while email is processing  
+✅ **Scalable** - Multiple workers can be started for high throughput  
+
+### Task Configuration
+
+Key settings in `settings.py`:
+
+```python
+# Message Broker
+CELERY_BROKER_URL = 'amqp://guest:guest@localhost:5672//'
+
+# Result Backend
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+
+# Task Settings
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
+```
+
+### How Tasks are Triggered
+
+#### When a Payment is Completed:
+
+```python
+# In PaymentViewSet.verify_status()
+send_payment_confirmation_email_task.delay(
+    booking_id=str(payment.booking.booking_id),
+    guest_email=payment.booking.guest.email,
+    guest_name=payment.booking.guest.first_name,
+    # ... other parameters
+)
+```
+
+The `.delay()` method sends the task to the message broker immediately and returns control to the caller.
+
+### Testing Celery Tasks
+
+#### 1. Verify Worker is Running
+
+```bash
+# Terminal should show:
+# - Connected to amqp://guest:guest@localhost:5672//
+# - [*] Ready to accept tasks
+```
+
+#### 2. Test Email Task (Manually)
+
+Create a test script `test_celery.py`:
+
+```python
+from listings.tasks import send_payment_confirmation_email_task
+
+# Trigger task
+result = send_payment_confirmation_email_task.delay(
+    booking_id='test-booking-123',
+    guest_email='test@example.com',
+    guest_name='John Doe',
+    listing_title='Cozy Apartment',
+    listing_location='Downtown NYC',
+    check_in_date='2025-02-01',
+    check_out_date='2025-02-05',
+    amount='500.00',
+    currency='USD',
+    payment_id='payment-123',
+    transaction_id='trans-456'
+)
+
+# Check task status
+print(f"Task ID: {result.id}")
+print(f"Task Status: {result.status}")
+```
+
+Run it:
+```bash
+python manage.py shell < test_celery.py
+```
+
+#### 3. Monitor Tasks with Flower (Web UI)
+
+```bash
+# Install Flower
+pip install flower
+
+# Start Flower
+celery -A alx_travel_app events
+
+# Open browser
+http://localhost:5555/
+```
+
+---
+
+## Monitoring and Debugging
+
+### View Celery Worker Logs
+
+```bash
+celery -A alx_travel_app worker -l debug
+```
+
+### Check Task Status
+
+```python
+# In Django shell
+from listings.tasks import send_payment_confirmation_email_task
+from celery.result import AsyncResult
+
+# Get task result
+result = AsyncResult('task-id-here')
+print(f"Status: {result.status}")
+print(f"Result: {result.result}")
+```
+
+### Common Issues
+
+| Issue | Solution |
+|-------|----------|
+| "Connection refused" | Ensure RabbitMQ is running: `rabbitmq-server` |
+| Tasks not executing | Check worker is running in separate terminal |
+| Emails not sending | Verify EMAIL_* settings in .env |
+| Task stuck | Check logs, restart worker, increase CELERY_TASK_TIME_LIMIT |
+
+---
+
 
 All API endpoints are under `/api/`
 
