@@ -6,9 +6,19 @@ in the background, allowing the main application to remain responsive
 while sending emails asynchronously.
 """
 import logging
-from celery import shared_task
 from django.core.mail import send_mail
 from django.conf import settings
+
+# Try to import celery, fallback to sync execution if not available
+try:
+    from celery import shared_task
+except ImportError:
+    # If Celery is not configured, provide a fallback decorator
+    def shared_task(*args, **kwargs):
+        def decorator(func):
+            func.delay = lambda *a, **k: func(*a, **k)
+            return func
+        return decorator
 
 logger = logging.getLogger(__name__)
 
